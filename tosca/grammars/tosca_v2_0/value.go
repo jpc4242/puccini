@@ -28,6 +28,7 @@ type Value struct {
 
 	DataType    *DataType           `traverse:"ignore" json:"-" yaml:"-"`
 	Information *normal.Information `traverse:"ignore" json:"-" yaml:"-"`
+	Converter   *tosca.FunctionCall `traverse:"ignore" json:"-" yaml:"-"`
 
 	rendered bool
 }
@@ -225,14 +226,6 @@ func (self *Value) RenderAttribute(dataType *DataType, definition *AttributeDefi
 			// Special types
 			self.Context.Data = reader(self.Context)
 		}
-
-		if comparer, ok := dataType.GetMetadataValue("puccini.comparer"); ok {
-			if hasComparer, ok := self.Context.Data.(HasComparer); ok {
-				hasComparer.SetComparer(comparer)
-			} else {
-				panic(fmt.Sprintf("type has \"puccini.comparer\" metadata but does not support HasComparer interface: %T", self.Context.Data))
-			}
-		}
 	} else if self.Context.ValidateType(ard.TypeMap) {
 		// Complex data types
 
@@ -261,14 +254,31 @@ func (self *Value) RenderAttribute(dataType *DataType, definition *AttributeDefi
 				}
 
 				// Grab information
-				if value.Information != nil {
-					if !value.Information.Empty() {
-						self.Information.Properties[key] = value.Information
-					}
+				if (value.Information != nil) && !value.Information.Empty() {
+					self.Information.Properties[key] = value.Information
 				}
 			} else if definition.IsRequired() {
 				self.Context.MapChild(key, data).ReportPropertyRequired("property")
 			}
+		}
+	}
+
+	if (definition != nil) && (definition.Metadata != nil) {
+		if converter, ok := definition.Metadata["puccini.converter"]; ok {
+			self.Converter = self.Context.NewFunctionCall(converter, nil)
+		}
+	}
+	if self.Converter == nil {
+		if converter, ok := dataType.GetMetadataValue("puccini.converter"); ok {
+			self.Converter = self.Context.NewFunctionCall(converter, nil)
+		}
+	}
+
+	if comparer, ok := dataType.GetMetadataValue("puccini.comparer"); ok {
+		if hasComparer, ok := self.Context.Data.(HasComparer); ok {
+			hasComparer.SetComparer(comparer)
+		} else {
+			panic(fmt.Sprintf("type has \"puccini.comparer\" metadata but does not support HasComparer interface: %T", self.Context.Data))
 		}
 	}
 }
@@ -304,7 +314,7 @@ func (self *Value) normalize(withInformation bool) normal.Constrainable {
 		normalMap := normal.NewMap()
 		for key, value := range data {
 			if v, ok := value.(*Value); ok {
-				normalMap.Put(key, v.normalize(false))
+				normalMap.Put(key, v.normalize(true))
 			} else {
 				normalMap.Put(key, normal.NewValue(value))
 			}
@@ -331,6 +341,10 @@ func (self *Value) normalize(withInformation bool) normal.Constrainable {
 	}
 
 	self.ConstraintClauses.NormalizeConstrainable(self.Context, normalConstrainable)
+
+	if self.Converter != nil {
+		normalConstrainable.SetConverter(self.Converter)
+	}
 
 	return normalConstrainable
 }
